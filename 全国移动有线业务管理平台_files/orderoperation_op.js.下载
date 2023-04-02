@@ -1,0 +1,941 @@
+define([
+    'Util',
+    'assets/common/cookie',
+    '../api/order',
+    '../api/utils',
+    'upload',
+    'dialog',
+    'text!tpl/order/operation/suspension.tpl',
+    'text!tpl/order/operation/schedule.tpl',
+    'text!tpl/order/operation/groupTimer.tpl',
+    'text!tpl/order/operation/urgency.tpl',
+    'text!tpl/order/operation/appointment.tpl',
+    'text!tpl/order/operation/designate.tpl',
+    'text!tpl/order/operation/transfer.tpl',
+    'text!tpl/order/operation/reassignment.tpl',
+    'text!tpl/order/operation/regression.tpl',
+    'text!tpl/order/operation/regressIptv.tpl',
+    'text!tpl/order/operation/regressEoms.tpl',
+    'text!tpl/order/operation/regressOfflineComplain.tpl',
+    'text!tpl/order/operation/regressSafety.tpl',
+    'text!tpl/order/operation/regressZw.tpl',
+    'text!tpl/order/operation/rejection.tpl',
+    'text!tpl/order/operation/reportOpen.tpl',
+    'text!tpl/order/operation/reportTs.tpl',
+    'text!tpl/order/operation/reportZw.tpl',
+    'text!tpl/order/operation/reportSafety.tpl',
+    'text!tpl/order/operation/reportComplain.tpl',
+    'text!tpl/order/operation/reportOfflineComplain.tpl',
+    'text!tpl/order/operation/cpnAudit.tpl',
+    'text!tpl/order/operation/relieveSuspend.tpl',
+    'text!tpl/order/operation/rejectSuspend.tpl'
+],
+    function (Util, Cookie, orderAPI, myUtils, Upload,Dialog,
+        suspensionTpl,
+        schedulTpl,
+        groupTimerTpl,
+        urgencyTpl,
+        appointmentTpl,
+        designateTpl,
+        transferTpl,
+        reassignmentTpl,
+        regressionTpl,
+        regressIptvTpl,
+        regressEomsTpl,
+        regressOfflineComplainTpl,
+        regressSafetyTpl,
+        regressZwTpl,
+        rejectionTpl,
+        reportOpenTpl,
+        reportTsTpl,
+        reportZwTpl,
+        reportSafetyTpl,
+        reportComplainTpl,
+        reportOfflineComplainTpl,
+        cpnAuditTpl,
+        relieveSuspendTpl,
+        rejectSuspendTpl
+    ) {
+        var userbean = Cookie.get('userbean');
+        var userRole = userbean ? JSON.parse(userbean).userRole : "";
+        var canToPerson = false; //默认不能调度/指派到个人
+        var getOperationHtml = function (operation, order) {
+            //定义操作if分支
+            Util.hdb.registerHelper("eq", function (operation1, operation2, options) {
+                if (operation1 == operation2) {
+                    return options.fn(this);
+                } else {
+                    return options.inverse(this);
+                }
+            });
+            var config = {
+                draftId: order.draftId
+            };
+            var data = {}
+            Util.hdb.compile(schedulTpl)({
+                "operation": operation
+            });
+            switch (operation) {
+                case '挂起':
+                    config.operation = 'suspension';
+                    config.url = 'suspension';
+                    config.tpl = suspensionTpl;
+                    config.date = true;
+                    $('#schedul').on('click', '#td_sendmsg', function () {
+                        if ($(this).is(':checked')) {
+                            $('#showMessage').css("display", "block")
+                        } else {
+                            $('#showMessage').css("display", "none")
+                        }
+                    });
+                    break;
+                case "解挂":
+                    config.operation = 'relieveSuspend';//报结接口
+                    config.tpl = relieveSuspendTpl;
+                    data = {
+                        draftId: order.draftId,
+                        orderType: order.orderType
+                    }
+                    config.ajax = false;
+                    break;
+                case "挂起驳回":
+                    config.operation = 'rejectSuspend';//报结接口
+                    config.tpl = rejectSuspendTpl;
+                    data = {
+                        draftId: order.draftId,
+                        orderType: order.orderType
+                    }
+                    config.ajax = false;
+                    break;
+                case '调度':
+                    config.operation = 'schedule';
+                    config.url = 'schedule/group';
+                    config.date = true;
+                    config.group = true;
+                    config.tpl = schedulTpl + groupTimerTpl;
+                    config.cityCode = order.cityCode;
+                    config.countyCode = order.countyCode;
+                    data = {
+                        draftId: order.draftId,
+                        orderType: order.orderType
+                    };
+                    //选择班组或者日期后，触发查询班组荷载
+                    $('#schedul').on('change', '[name="mtnGroupId"]', function () {
+                        var taskDay = $('[name="taskDay"]').val();
+                        if (taskDay) {
+                            var option = {
+                                mtnGroupId: $(this).val(),
+                                taskDay: taskDay
+                            }
+                            orderAPI.getMtnGroupLoad(option, true);
+                        }
+                    });
+                    //选择人员或者日期后，触发查询人员荷载
+                    $('#schedul').on('change', '[name="userId"]', function () {
+                        var taskDay = $('[name="taskDay"]').val();
+                        if (taskDay) {
+                            var option = {
+                                mtnGroupId: $('[name="mtnGroupId"]').val(),
+                                mtnUserId: $(this).val(),
+                                taskDay: taskDay
+                            }
+                            orderAPI.getMtnGroupLoad(option, $(this).val() == "");
+                        }
+                    });
+                    //选择任务时间
+                    $('#schedul').off('click', '.dipTime td').on('click', '.dipTime td', function () {
+                        choiseTaskDay($(this), true);
+                    });
+                    //跨区调度按钮点击
+                    // $('#schedul').off('click', '#scheduleCross').on('click', '#scheduleCross', function () {
+                    //     $('#dipTime td').removeClass('selected').html(''); //清空已经选择的时间点
+                    //     popScheduleCross(order.orderType); //弹出地市区县
+                    // })
+                    //不用跨区调度，直接绑定级联操作
+                    linkage(order, operation, order.orderType, order.countyCode, order.cityCode);
+                    break;
+                case '指派':
+                    config.operation = 'grabMonad'; //提交url
+                    config.url = 'schedule/users/'+ order.draftId+ '/'+ order.mtnGroupId;   //初始化url
+                    config.tpl = designateTpl;
+                    break;
+                case '转派':
+                    config.operation = 'redeploy';  //提交url
+                    config.url = 'redeploy';        //初始化url
+                    config.tpl = transferTpl;
+                    config.transfer = true;
+                    config.orderState = order.orderState;
+                    break;
+                case '预约':
+                    config.operation = 'appointment';
+                    config.url = 'appointment';
+                    config.date = true;
+                    config.appointmentPhone = true;
+                    config.order = order;
+                    var minute = '<option value = "0">请选择</option>';
+                    for (var i = 1; i < 60; i++) {
+                        minute += '<option value="' + i + '">' + ((i < 10 ? '0' : '') + i) + '</option>'
+                    }
+                    config.tpl = appointmentTpl + groupTimerTpl ;//+ '<div style="padding:0 16px 10px;">精确到分钟 <select name="taskMinute">' + minute + '</select></div>';
+                    //选择任务时间
+                    $('#schedul').off('click', '.dipTime td').on('click', '.dipTime td', function () {
+                        choiseTaskDay($(this));
+                    });
+                    break;
+                case '装机退单':
+                case '装机退单审核':
+                    config.operation = 'regression';
+                    config.url = 'regression';
+                    config.tpl = regressionTpl;
+                    config.selectedChange = true;
+                    data = {
+                        orderType: order.orderType,
+                        actType: order.actType,
+                        serviceType: order.serviceType,
+                    }
+                    $('#schedul').on('click', '#td_sendmsg', function () {
+                        if ($(this).is(':checked')) {
+                            $('#showMessage').css("display", "")
+                        } else {
+                            $('#showMessage').css("display", "none")
+                        }
+                    });
+                    break;
+                case '全路由退单':
+                case '全路由退单审核':
+                    config.operation = 'regress/route';//退单接口
+                    config.url = 'regress/route';      //退单前请求参数接口
+                    config.tpl = regressionTpl;
+                    config.selectedChange = true;
+                    data = {
+                        serviceType: order.serviceType,
+                        orderType: order.orderType
+                    }
+                    $('#schedul').on('click', '#td_sendmsg', function () {
+                        if ($(this).is(':checked')) {
+                            $('#showMessage').css("display", "")
+                        } else {
+                            $('#showMessage').css("display", "none")
+                        }
+                    });
+                    break;
+                case '装维组网退单':
+                case 'PBOSS组网退单':
+                case '装维组网退单审核':
+                case 'PBOSS组网退单审核':
+                    config.operation = 'regressNet';
+                    config.url = 'toRegressNet';
+                    config.tpl = regressZwTpl;
+                    config.regressNet = true;
+                    data = {
+                        serviceType: order.serviceType,
+                        orderType: order.orderType
+                    }
+                    $('#schedul').on('click', '#td_sendmsg', function () {
+                        if ($(this).is(':checked')) {
+                            $('#showMessage').css("display", "")
+                        } else {
+                            $('#showMessage').css("display", "none")
+                        }
+                    });
+                    break;
+                case '变更包含IPTV退单':
+                case '变更包含IPTV退单审核':
+                    config.operation = 'regressIptv';
+                    config.url = 'regressIptv';
+                    config.regressIptv = true;
+                    config.tpl = regressIptvTpl;
+                    break;  
+                case '安防退单':
+                case '安防退单审核':
+                    config.operation = 'regressSafety';
+                    config.url = 'regressSafety';
+                    config.tpl = regressSafetyTpl;
+                    data = {
+                        serviceType: order.serviceType,
+                        orderType: order.orderType
+                    }
+                    $('#schedul').on('click', '#td_sendmsg', function () {
+                        if ($(this).is(':checked')) {
+                            $('#showMessage').css("display", "")
+                        } else {
+                            $('#showMessage').css("display", "none")
+                        }
+                    });
+                    break;   
+                case '投诉退单':
+                case '投诉退单审核':
+                    config.operation = 'regressEoms';
+                    config.url = 'regressEoms';
+                    config.tpl = regressEomsTpl;
+                    config.regressEoms = true;
+                    $('#schedul').on('click', '#get_regressEoms_radiusLog_btn', function () {
+                        orderAPI.get_regressEoms_radiusLog(order.draftId);
+                    });
+                    //config.selectedChange = true;
+                    config.regressEomsFileUpload = regressEomsFileUpload;
+                    break;
+                case '线下投诉退单审核':
+                    config.operation = 'regress/satisfactionRepair';
+                    config.url = 'regress/satisfactionRepair';
+                    config.tpl = regressOfflineComplainTpl;
+                    //config.selectedChange = true;
+                    break;
+                case '驳回':
+                    config.operation = 'rejection';
+                    config.url = 'rejection';
+                    config.tpl = rejectionTpl;
+                    // $('#operationValue').val('rejection');
+                    // $('#schedul').html(rejectionTpl);
+                    // 只需填写备注。不用和后台交互获取初始化
+                    config.ajax = false;
+                    break;
+                case '装机报结审核':
+                    if(order.serviceType == "调整宽带"){
+                        config.operation = 'report/open';
+                        config.url = 'report/group';
+                        config.tpl = reportTsTpl;
+                        data = {
+                            draftId: order.draftId,
+                            orderType: order.orderType,
+                            mtnGroupId: order.mtnGroupId,
+                            radiusLog: $("#radiusLog").val()
+                        }
+                        config.openReport = true;
+                        break;
+                    }else{
+                        config.operation = 'report/open';
+                        // config.url = 'schedule/group';
+                        config.url = 'report/group';
+                        config.tpl = reportOpenTpl;
+                        data = {
+                            draftId: order.draftId,
+                            orderType: order.orderType,
+                            mtnGroupId: order.mtnGroupId,
+                            radiusLog: $("#radiusLog").val(),
+                        }
+                        config.openReport = true;
+                        if (order.actType == '撤销') {
+                            config.removeGetOnuPower = true;
+                        }
+                        if(order.actType != '开通'){
+                            config.removeGetSpeedTest = true;
+                        }
+                        //获取上网认证记录的按钮
+                        $('#schedul').on('click', '#get_radiusLog_btn', function () {
+                            orderAPI.getRadiusLog(order.draftId);
+                        });
+                        break;
+                    }
+                case '全路由报结审核':
+                    config.operation = 'report/route';
+                    config.url = 'report/group';
+                    config.tpl = reportOpenTpl;
+                    data = {
+                        draftId: order.draftId,
+                        orderType: order.orderType,
+                        mtnGroupId: order.mtnGroupId,
+                        radiusLog: $("#radiusLog").val()
+                    }
+                    config.openReport = true;
+                    if (order.actType == '撤销') {
+                        config.removeGetOnuPower = true;
+                    }
+                    //获取上网认证记录的按钮
+                    $('#schedul').on('click', '#get_radiusLog_btn', function () {
+                        orderAPI.getRadiusLog(order.draftId);
+                    });
+                    break;
+                case '装维组网报结审核':
+                case 'PBOSS组网报结审核':
+                    config.operation = 'report/netWorking';//组网报结接口
+                    config.url = 'report/group';//获取组网装机班组
+                    config.tpl = reportZwTpl;
+                    config.netWorking = true;
+                    data = {
+                        draftId: order.draftId,
+                        orderType: order.orderType,
+                        mtnGroupId: order.mtnGroupId,
+                        radiusLog: $("#radiusLog").val()
+                    }
+                    break;
+                case '安防报结审核':
+                    config.operation = 'report/safety';   //报结提交接口
+                    config.url = 'report/group';    //初始化接口
+                    config.tpl = reportSafetyTpl;   //tpl页面
+                    data = {
+                        draftId: order.draftId,
+                        orderType: order.orderType,
+                        mtnGroupId: order.mtnGroupId,
+                    }
+                    config.safety = true;
+                    break;
+                case '投诉报结':
+                case '投诉报结审核':
+                    config.operation = 'report/complain';
+                    config.url = 'report/complain';
+                    config.tpl = reportComplainTpl;
+                    config.complain = true;
+                    data = {
+                        draftId: order.draftId,
+                        orderType: order.orderType
+                    }
+                    config.regressEomsFileUpload = regressEomsFileUpload;
+                    break;
+                case '线下投诉报结审核':
+                    config.operation = 'report/offlineComplain/';    //报结提交接口
+                    config.url = 'report/offlineComplain';          //初始化接口
+                    config.tpl = reportOfflineComplainTpl;          //tpl页面
+                    config.offlineComplain = true;                  //线下投诉单初始化回调标准
+                    data = {
+                        draftId: order.draftId,
+                        orderType: order.orderType
+                    }
+                    break;
+                case '改派':
+                    config.operation = 'reassignment';
+                    config.url = 'schedule/group';
+                    config.tpl = reassignmentTpl;
+                    config.cityCode = order.cityCode;
+                    config.countyCode = order.countyCode;
+                    config.group = true;
+                    data = {
+                        draftId: order.draftId,
+                        orderType: order.orderType
+                    }
+                    //跨区调度按钮点击
+                    // $('#schedul').off('click', '#scheduleCross').on('click', '#scheduleCross', function () {
+                    //     popScheduleCross(order.orderType);
+                    // })
+                    //不用跨区调度，直接绑定级联操作
+                    linkage(order, operation, order.orderType, order.countyCode, order.cityCode, order.mtnGroupId);
+                    break;
+                case '催单':
+                    config.operation = 'urgency';
+                    config.url = 'urgency';
+                    config.tpl = urgencyTpl;
+                    break;
+                case '审核通过':
+                case '审核驳回':
+                    config.operation = 'audit';
+                    config.url = 'audit';
+                    config.tpl = cpnAuditTpl;
+                    $('#cpnAuditPassed').val('true');
+                    //只需填写备注。不用和后台交互获取初始化
+                    config.ajax = false;
+                    break;
+                case '派发':
+                    orderAPI.dispatchReservationCenter(order.draftId);
+                    return;
+                default:
+                    return '';
+            }
+            //操作提交
+            $('#schedul').off('click', '#operation_form .operationSubmit').on('click', '#operation_form .operationSubmit', function () {
+                $this = $(this);
+                //需要校验的数据
+                if (operation == '调度') {
+                    if (!$('#schedul [name=mtnGroupId]').val()) {
+                        myUtils.propMessage("请先选择班组", true);
+                        return false;
+                    } else if (!$('#schedul [name=taskHour]').val()) {
+                        myUtils.propMessage("请选择调度具体的时间点", true);
+                        return false;
+                    }
+                    // 调度预约时间，不能在当前时间之前
+                    var taskDay = $('[name=taskDay]').val();
+                    var taskHour = $('#taskHour').val();
+                    var skdApptTime = taskDay + ' ' + (taskHour > 9 ? '' : '0') + taskHour;
+                    if (skdApptTime < new Date().pattern("yyyy-MM-dd HH")) {
+                        myUtils.propMessage("调度分配时间不能在当前时间点之前，请重新选择调度日期或者时间点", true);
+                        return false;
+                    }
+                } else if (operation == '改派') {
+                    if (!$('#schedul [name=mtnGroupId]').val()) {
+                        myUtils.propMessage("请先选择班组", true);
+                        return false;
+                    }
+                } else if (operation == '指派') {
+                    if (!$('#schedul [name=mainUserId]').val()) {
+                        myUtils.propMessage("请先选择装维人员", true);
+                        return false;
+                    }
+                } else if (operation == '转派') {
+                    if (!$('#schedul [name=mtnUserId]').val()) {
+                        myUtils.propMessage("请先选择装维人员", true);
+                        return false;
+                    }
+                } else if (operation == '预约') {
+                    if (!$('#schedul [name=mtnUserId]').val()) {
+                        myUtils.propMessage("请先选择装维人员", true);
+                        return false;
+                    } else if (!$('#schedul #taskHour').val()) {
+                        myUtils.propMessage("请选择预约具体的时间点", true);
+                        return false;
+                    }
+                    // 预约时间：由taskDay、taskHour拼接成yyyy-mm-dd hh:mm:ss
+                    var taskDay = $('[name=taskDay]').val();
+                    var taskHour = $('#taskHour').val();
+                    var mtnApptTime = taskDay + ' ' + (taskHour > 9 ? '' : '0') + taskHour + ":00:00";
+                    $('[name=mtnApptTime]').val(mtnApptTime);
+                    if (mtnApptTime < new Date().pattern("yyyy-MM-dd HH:00:00")) {
+                        myUtils.propMessage("预约时间不能在当前时间点之前，请重新选择预约日期或者时间点", true);
+                        return false;
+                    }
+                } else if (operation == '装机报结审核' || operation == '全路由报结审核') {
+                    if (!$('#schedul [name=realMtnGroupId]').val()) {
+                        myUtils.propMessage("请先选择报结班组", true);
+                        return false;
+                    }
+                    if($('#radiusLog').val() != '是'){
+                        var contentMessage = '当前账号没有用户成功认证记录，请确定是否仍要报结。'
+                        var mustRadiusLog = $('#mustRadiusLog').val()=='true';
+                        if(mustRadiusLog){
+                            contentMessage = '当前账号没有用户成功认证记录，不能报结!'
+                        }
+                        var option_str ="&isSnValidate=1&validateOnuPower=0";
+                        if(userRole==90 || userRole==14 || userRole==16 || (("开通" == order.actType || "变更" == order.actType)&&!order.serviceType.includes('新开宽带')) || order.actType == "撤销" || order.serviceType == "调整宽带"){
+                            orderAPI.operationSubmit(config.operation, order,
+                                $('#operation_form').serialize().replace(/\+/g, " ")+option_str);
+                                return;
+                        }
+                        var dialog = new Dialog({
+                            mode: 'confirm',
+                            cancelDisplay: mustRadiusLog?false:true,
+                            content: contentMessage,
+                            ok:function(){
+                                if(!mustRadiusLog){
+                                    orderAPI.operationSubmit(config.operation, order,
+                                        $('#operation_form').serialize().replace(/\+/g, " ")+option_str);
+                                }
+                            },
+                            cancel: function () { console.log('点击了取消按钮') }, 
+                        });
+                        return;
+                    }
+                }else if (operation == '装维组网报结审核' || operation == 'PBOSS组网报结审核' ) {
+                    if (!$('#schedul [name=realMtnGroupId]').val()) {
+                        myUtils.propMessage("请先选择报结班组", true);
+                        return false;
+                    }
+                    var option_str ="&isSnValidate=1&validateOnuPower=0";
+                    orderAPI.operationSubmit(config.operation, order, $('#operation_form').serialize().replace(/\+/g, " ")+option_str);
+                    return;
+                } else if (operation == '投诉报结审核') {
+                    if (!$('#schedul [name=solveState]').val()) {
+                        myUtils.propMessage("请选择解决情况", true);
+                        return false;
+                    } else if (!$('#schedul [name=custConfirm]').val()) {
+                        myUtils.propMessage("请选择客户联系情况", true);
+                        return false;
+                    } else if (!$('#schedul [name=hasReplyCust]').val()) {
+                        myUtils.propMessage("请选择是否已答复客户", true);
+                        return false;
+                    } else if (!$('#schedul [name=complainTypeId]').val()) {
+                        myUtils.propMessage("请选择投诉现象", true);
+                        return false;
+                    } else if (!$('#schedul [name=compReasonId]').val()) {
+                        myUtils.propMessage("请选择投诉原因", true);
+                        return false;
+                    }
+                    var questionType = $("#schedul .complainReasonSelect").find("option:selected").attr("questionType");    
+                    var questionTypeArr = ['1','2','3'];
+                    if (questionType == '1') {
+                        if (!$('#schedul [name=equipmentTypeId]').val()) {
+                            myUtils.propMessage('终端原因，请选择设备类型');
+                            return false;
+                        }
+                    }
+                    if (questionTypeArr.indexOf(questionType) >-1 ) {
+                        if (!$('#schedul [name=equipmentVendorId]').val()) {
+                            myUtils.propMessage('终端原因，请选择设备厂商');
+                            return false;
+                        }
+                        if (!$('#schedul [name=equipmentModelId]').val()) {
+                            myUtils.propMessage('终端原因，请选择设备型号');
+                            return false;
+                        }
+                    }
+                    
+                    var text = $.trim($('#schedul [name=compReasonRemark]').val());
+                    if ($.trim($('#schedul [name=compReasonId] option:selected').text())=="其他") {
+                        if(text ==""){
+                            myUtils.propMessage("投诉原因为其他，备注信息需必填", true);
+                            return false;
+                        }
+                        var reg = new RegExp("[\\u4E00-\\u9FFF]+","g");
+                    　　if(!reg.test(text)){
+                            myUtils.propMessage("投诉原因为其他，备注信息必须包含汉字！", true); 
+                            return false;
+                        }   
+                        if((text!="")&&myUtils.getByteLen(text)<10||myUtils.getByteLen(text)>200){
+                            myUtils.propMessage("备注信息需在5-100个汉字之间", true);
+                            return false;
+                        };
+                    }else{
+                        if (myUtils.getByteLen(text)>200){
+                            myUtils.propMessage("备注信息需少于100个汉字", true);
+                            return false;
+                        };
+                    }
+                    if($('#radiusLog').val() != '是'){
+                        var contentMessage = '当前账号没有用户成功认证记录，请确定是否仍要报结。'
+                        var mustRadiusLog = $('#mustRadiusLog').val()=='true';
+                        if(mustRadiusLog){
+                            contentMessage = '当前账号没有用户成功认证记录，不能报结!'
+                        }
+                        var option_str ="&isSnValidate=1&validateOnuPower=0";
+                        if( userRole==90 || userRole==14 || userRole==16){
+                            orderAPI.operationSubmit(config.operation, order,
+                                $('#operation_form').serialize().replace(/\+/g, " ")+option_str);
+                                return;
+                        }
+                        var dialog = new Dialog({
+                            mode: 'confirm',
+                            cancelDisplay: mustRadiusLog?false:true,
+                            content: contentMessage,
+                            ok:function(){
+                                if(!mustRadiusLog){
+                                    orderAPI.operationSubmit(config.operation, order,
+                                        $('#operation_form').serialize().replace(/\+/g, " ")+option_str);
+                                }
+                            },
+                            cancel: function () { console.log('点击了取消按钮') }, 
+                        });
+                        return;
+                    }
+                } else if (operation == '线下投诉报结审核') {
+                    if (!$('#schedul [name=repairSuc]').val()) {
+                        myUtils.propMessage("请选择修复是否成功", true);
+                        return false;
+                    } else if (!$('#schedul [name=repairMeasure]').val()) {
+                        myUtils.propMessage("请选择具体修复措施", true);
+                        return false;
+                    } else if (!$('#schedul [name=problemReason1]').val()) {
+                        myUtils.propMessage("请选择一级原因", true);
+                        return false;
+                    } else if (!$('#schedul [name=problemReason2]').val()) {
+                        myUtils.propMessage("请选择二级原因", true);
+                        return false;
+                    } else if (!$('#schedul [name=problemReason]').val()) {
+                        myUtils.propMessage("请选择三级原因", true);
+                        return false;
+                    }
+                } else if (operation == '装机退单审核' || operation == '全路由退单审核') {
+                    if ($('#regressMarkList').css('display') != 'none') {
+                        var remarkValue = $('#sechedul_remark').val();
+                        if (remarkValue == '其他:') {
+                            myUtils.propMessage("请先在其他后填写备注", true);
+                            return false;
+                        } else if (remarkValue == '') {
+                            myUtils.propMessage("请先选择一个常用备注或者手动填写一个备注", true);
+                            return false;
+                        }
+                    }
+                    if ($('.date').css('display') != 'none') {
+                        if ($('#dateValue').val() == '') {
+                            myUtils.propMessage("请先选择用户期望预约的时间", true);
+                            return false;
+                        }
+                    }
+                }else if(operation == '装维组网退单审核' || operation == 'PBOSS组网退单审核'){
+                    var reasonCode = $('#schedul [name=reasonCode]').val();
+                    var remarkValue = $('#sechedul_remark').val();
+                    if(!reasonCode){
+                        myUtils.propMessage("请选择退单原因", true);
+                        return false;
+                    }
+                    if(reasonCode == "100902" || reasonCode == "300902"){//300902属于撤销，组网单目前没有撤销类型退单
+                        if ($.trim(remarkValue) == '') {
+                            myUtils.propMessage("其他原因，请填写备注信息", true);
+                            return false;
+                        }
+                    }
+                }else if (operation == '安防退单审核') {
+                    var reasonCode = $('#schedul [name=reasonCode]').val();
+                    var remarkValue = $('#sechedul_remark').val();
+                    if(reasonCode == "200706"){
+                        if (remarkValue == '') {
+                            myUtils.propMessage("退单原因为其他，备注信息需必填", true);
+                            return false;
+                        }
+                    }
+                }else if (operation == '解挂') {
+                    var text = $.trim($('#schedul [name=reason]').val());
+                    if(text ==""){
+                        myUtils.propMessage("请填写解挂原因", true);
+                        return false;
+                    }
+                } else if (operation == '挂起驳回' ) {
+                    var text = $.trim($('#schedul [name=reason]').val());
+                    if(text ==""){
+                        myUtils.propMessage("请填写驳回备注信息", true);
+                        return false;
+                    }
+                }
+
+
+                //添加是否发送短信
+                var isSendSms = "";
+                if ($('#td_sendmsg').attr('id')) {
+                    var isSendSmsValue = $('#td_sendmsg').is(':checked');
+                    isSendSms = "&isSendSms=" + $('#td_sendmsg').is(':checked');
+                }
+                //添加原因的具体描述
+                var reason = "";
+                if ($('[name="reasonCode"]').attr('name')) {
+                    reason = "&reason=" + $('[name="reasonCode"] :selected').text();
+                }
+                //添加审核是否通过
+                var passed = "";
+                if (operation == '审核通过') {
+                    passed += "&passed=" + true;
+                } else if (operation == '审核驳回') {
+                    passed += "&passed=" + false;
+                }
+                //isSendSms, reason, passed 已经和后端沟通过，没有使用到
+                var option_str ="&isSnValidate=1&validateOnuPower=0";
+                orderAPI.operationSubmit(config.operation, order,
+                    $('#operation_form').serialize().replace(/\+/g, " ") + option_str + isSendSms + reason + passed);
+            });
+            $('#operationValue').val(config.operation);
+            orderAPI.getOrderOperationInit(config, data);
+        };
+        //跨区调度显示区县班组
+        // var popScheduleCross = function (orderType) {
+        //     var $obj = $('#scheduleCross').next();
+        //     $('#schedul #mtnGroupId').removeAttr('name'); //废除上面的选择班组
+        //     //获取地市的下拉选
+        //     var display = $obj.css('display');
+        //     $('#schedul .mtnGroups .regions').html("<option>请选择</option>");
+        //     if (display == 'none') {
+        //         $('#schedul #mtnGroupId').removeAttr('name'); //废除上面的选择班组
+        //         display = 'inline';
+        //     } else {
+        //         $('#schedul #mtnGroupId').attr('name', 'mtnGroupId');
+        //         display = 'none';
+        //         //废除跨区的选择班组
+        //         $('#schedul .regions').removeAttr('name'); //废除上面的选择班组
+        //     }
+        //     // display = display == '' ? 'inline' : 'none';
+        //     myUtils.getCity({}, {
+        //         el: $('#schedul .cityCode'),
+        //         topValue: '请选择',
+        //         select: true
+        //     });
+        //     //显示地市区县班组联动
+        //     $obj.css('display', display);
+        //     linkage(orderType);
+        // }
+
+        function linkage(order, operation, orderType, defaultCountyCode, defaultCityCode, mtnGroupId) {
+            //地市、班组联动
+            $('#schedul').off('change', '.regions').on('change', '.regions', function () {
+                var $this = $(this);
+                var index = $this.children(':selected').attr('index');
+                var cityCode = $this.children(':selected').attr('cityCode');
+                var groupId = $this.children(':selected').attr('groupId');
+                var mtnGroupName = $this.children(':selected').text();
+                if (index) { //选择地市，通过数组下标确定是哪个地市下的
+                    if (index == -1) {
+                        $('#schedul .countyCode .regions').html("<option value=''>请选择</option>");
+                        $('#schedul .mtnGroups .regions').html("<option value=''>请选择</option>");
+                        $('#schedul .mtnUsers .regions').html("<option value=''>请选择</option>");
+                    } else {
+                        myUtils.getCounty(index, {
+                            el: $('#schedul .countyCode'),
+                            name: 'countyCodeList',
+                            select: true,
+                            topValue: '请选择',
+                            defaultLinkedValue: $this.val() == defaultCityCode ? defaultCountyCode : ''
+                        });
+                        $('#schedul .mtnGroups .regions').html("<option value=''>请选择</option>");
+                        $('#schedul .mtnUsers .regions').html("<option value=''>请选择</option>");
+                    }
+                } else if (cityCode) {//区县选择
+                    var countyCode = $this.children(':selected').attr('countyCode');
+                    if (cityCode == -1) {
+                        $('#schedul .mtnGroups .regions').html("<option value=''>请选择</option>");
+                        $('#schedul .mtnUsers .regions').html("<option value=''>请选择</option>");
+                    } else {
+                        myUtils.getMtnGroups({
+                            cityCode: cityCode,
+                            countyCode: countyCode,
+                            orderType: orderType,
+                            draftId: order.draftId,
+                        }, {
+                            el: $('#schedul .mtnGroups'),
+                            name: 'groupCodeList',
+                            select: true,
+                            topValue: '请选择'
+                        }, {
+                            isSchedule: true, 
+                            order : order
+                        }, mtnGroupId);
+                    }
+                } else if(groupId) {
+                    if(operation=="调度"){
+                        if(groupId == -1) {
+                            $('#schedul .mtnUsers .regions').html("<option value=''>请选择</option>");
+                        } else {
+                            var cityCode = $("[name=cityCodeList]").val();
+                            var countyCode = $("[name=countyCodeList]").val();
+                            var grabMonadSwitch = $('#grouplist #grabMonadSwitch').val();
+                            if(grabMonadSwitch=="1"){
+                                myUtils.getMtnUsers({
+                                    draftId: order.draftId,
+                                    groupId: groupId,
+                                    limit: 1000,
+                                    start: 0,
+                                    page: 1,
+                                }, {
+                                    el: $('#schedul .mtnUsers'),
+                                    name: "userId",
+                                    select: true,
+                                    topValue: '请选择',
+                                }, function(data){
+            
+                                });
+                            }
+                        }
+                    }
+				} 
+            });
+        }
+
+        function choiseTaskDay(obj, isgroup) {
+            if (isgroup) { //如果是班组需校验选择班组
+                var taskDay = $('[name="taskDay"]').val();
+                var mtnGroupId = $('[name="mtnGroupId"]').val();
+                if (!mtnGroupId) {
+                    myUtils.propMessage("请先选择班组", true);
+                    return;
+                } else if (!taskDay) {
+                    myUtils.propMessage("请先选择日期", true);
+                    return;
+                }
+            }
+            if (obj.attr("selected_red") == 1) {
+                myUtils.propMessage("您选择的时段已经超过最高装维能力，请重新选择！", true);
+                return;
+            }
+            var t = "0,1,2,3,4";
+            if (t.indexOf(obj.attr("hour")) > -1) {
+                myUtils.propMessage("0点-4点不支持派单", true);
+                return;
+            }
+            var num = parseInt(obj.html());
+            if (obj.attr("new") == 1) { //点击的是刚才设置的。消除掉
+                if (num == 1) {
+                    num = '';
+                    obj.removeClass('selected');
+                } else {
+                    num--;
+                }
+                obj.removeAttr('new').html(num);
+                $('#taskHour').val('');
+            } else {
+                //将刚才点击的去除
+                $old = obj.siblings('[new]');
+                var oldNum = parseInt($old.html());
+                if (oldNum == 1) {
+                    $old.removeClass('selected').removeAttr('new').html('');
+                } else if (oldNum) {
+                    $old.removeAttr('new').html(--oldNum);
+                }
+                //将现在点击的+1;
+                if (obj.html() == '') {
+                    num = 1;
+                } else {
+                    num++;
+                }
+                $('#taskHour').val(obj.attr('hour'));
+                obj.attr("new", "1").addClass('selected').html(num);
+            }
+        }
+
+        //投诉单退单附件上传功能,再把退单二级原因加上
+        var regressEomsFileUpload = function (data, config) {
+            myUtils.imgUpload(1, orderAPI.fileUploadUrl);
+            myUtils.imgUpload(2, orderAPI.fileUploadUrl);
+            myUtils.imgUpload(3, orderAPI.fileUploadUrl);
+            // var uploadConfig = {
+            //     el: '#attFile', //组件绑定的容器
+            //     className: 'upload', //组件外围的className
+            //     url: orderAPI.fileUploadUrl, //组件上传的后台接口
+            //     //				        deleteUrl: '', //组件上传的后台接口
+            //     paramName: 'file' //往后台发送表单数据时，name字段的名子
+            // }
+            // $('#deleteFile').on('click', function () {
+            //     $('#myFile').html('<span style="color:red">已删除文件</span>,点击确认提交')
+            //     $('#attachName').val('');
+            //     $('#attachUrl').val('');
+            // })
+            // var filesUpload = new Upload(uploadConfig);
+            // $('#attFile').find(':input').attr('name', 'file');
+            // filesUpload.on('add', function (e, data) {
+            //     loadingMtnDistricts = myUtils.getLoading($('.wrap'), '790', '上传文件中...');
+            //     $('#attFile').find('[name=file]').attr('disabled', true);
+            // })
+            // filesUpload.on('done', function (e, data) {
+            //     var attachUrl = data.result.bean;
+            //     var attachName = $('#attFile').find('.upload-filename a').html();
+            //     $('#attachUrl').val(attachUrl);
+            //     $('#attachName').val(attachName);
+            //     $('#myFile').html('已选择文件<span style="color:red">' + attachName + '</span>');
+            //     $('#attFile').find('[name=file]').attr('disabled', true);
+            //     loadingMtnDistricts.destroy();
+            // })
+            // filesUpload.on('remove', function (e, data) {
+            //     //e新增自定义remove方法，可根据服务端文件处理结果删除文件列表中的当前行
+            //     // e.remove();
+            //     $('#myFile').html('<span style="color:red">已删除文件</span>,点击确认提交')
+            //     $('#attachName').val('');
+            //     $('#attachUrl').val('');
+            //     $('#attFile').find('[name=file]').attr('disabled', false);
+            //     loadingMtnDistricts.destroy();
+            // })
+            // filesUpload.on('fail', function (e, data) {
+            //     myUtils.propMessage("文件上传失败，请先删除再重新上传", true);
+            //     $('#showFile').html('文件上传失败，<span style="color:red">请先删除再重新上传</span>')
+            //     console.log('文件上传失败！');
+            //     loadingMtnDistricts.destroy();
+            // })
+
+            //退单二级原因加上
+            /*暂时投诉单二级原因不需要
+            var reasons = data.bean.reasons;
+            $('#reasonCode1').on('change',function(){
+                for (var i = 0; i < reasons.length; i++) {
+                    if(reasons[i].enumId == $(this).val()){
+                        renderResonCode2(reasons[i].children);
+                    }
+                }
+            })
+            for (var i = 0; i < reasons.length; i++) {
+                var reasons2 = reasons[i].children;
+                for (var j = 0; j < reasons2.length; j++) {
+                    if (reasons2[j].enumId == data.bean.reasonCode) {
+                        $('#reasonCode1').val(reasons2[j].parentEnumId);
+                        renderResonCode2(reasons2,data.bean.reasonCode)
+                        return;
+                    }
+                }
+            }*/
+        }
+
+        //渲染二级原因
+        var renderResonCode2 = function (reasonList, selectCode) {
+            if (reasonList && reasonList.length > 0) {
+                var dom = ""
+                for (var i = 0; i < reasonList.length; i++) {
+                    dom += '<option value=' + reasonList[i].enumId + ' reason=' + reasonList[i].enumVal + '  ' + (selectCode == reasonList[i].enumId ? 'selected' : '') + '>'+reasonList[i].enumVal+'</option>';
+                }
+                $('#reasonCode2').html(dom);
+            }
+        }
+        //文件上传组件渲染
+        return {
+            getOperationHtml: getOperationHtml
+        }
+    });

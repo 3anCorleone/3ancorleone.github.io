@@ -1,0 +1,215 @@
+define([
+    'Util',
+    'date',
+    'assets/common/cookie',
+    'text!tpl/order/orderoperation.tpl',
+    'text!tpl/order/orderoperation_status.tpl',
+    'text!tpl/order/orderoperation_workflow.tpl',
+    'text!tpl/order/orderMessage.tpl',
+    'text!tpl/order/operation/orderCheck.tpl',
+    './orderoperation_op',
+    '../api/order',
+    '../api/utils',
+    'dialog'
+],
+    function (Util, MyDate, Cookie, Tpl, statusTpl, workflowTpl, orderMessageTpl, orderCheckTpl, op, orderAPI, myUtils, Dialog) {
+        var $el, indexModule, param, userbean, userRole;
+
+        return function (_indexModule, _param) {
+            param = _param;
+            //将根节点赋值给接口
+            this.content = $(Tpl);
+            //$el = $(Tpl);
+            //页面渲染后执行函数
+            this.renderCallback = init;
+        };
+        function init() {
+            userbean = Cookie.get('userbean');
+            userRole = userbean ? JSON.parse(userbean).userRole : "";
+            //页面渲染后执行函数-业务代码入口
+            //通过param.id里面的订单号调用后台拿到数据后
+            var json = param.param;
+            //console.log(json);
+            if (json.orderState == '待退单' || json.orderState == '待报结' || json.orderState == '待审核') {
+                //非待配置派发下的退单和报结操作需要加上驳回操作
+                //console.log(json.operationName);
+                if (json.operation) { // 添加[驳回]操作
+                    if(json.orderType==6){//若为驻地网抢修单
+                        json.operation = '审核驳回,审核通过';
+                        json.operationName = '审核驳回,审核通过';
+                    }else{
+                        json.operation = json.operation + ',驳回';
+                        json.operationName = json.operationName + ',驳回';
+                    }
+                }
+            }
+            if (json.orderState == '待挂起') {
+                if (json.operation) { // 添加[驳回]操作
+                    json.operation = '挂起驳回,'+json.operation;
+                    json.operationName = '挂起驳回,'+json.operationName;
+                }
+            }
+            
+            json.operation = json.operation ? json.operation.split(',') : '';
+            json.operationName = json.operationName ? json.operationName.split(',') : '';
+            // json.orderUsedMessage = JSON.parse(json.orderUsedMessage);
+            //将数据放入，渲染前面的状态和操作按钮
+            $('#flowdiv').html(Util.hdb.compile(statusTpl)(json));
+            $('#orderId').html(json.id);
+            //查询得到流程图
+            orderAPI.getWorkflowGraph(json.draftId, { tpl: workflowTpl, el: $("#workflowGraph") }, json.orderState)
+            //得到定单详情
+            orderAPI.getOrderMessage(json.draftId, json.orderType, { tpl: orderMessageTpl, el: $('#orderMessage') }, function(data){
+                //获取测速速率
+                $('#schedul').on('click', '#get_speedTest_btn', function () {
+                    var bandwidth = "";
+                    if(data.orderModel.bandwidth){
+                        bandwidth = data.orderModel.bandwidth;
+                    }
+                    var downloadUrl = $("#testUrlAddrs").val();
+                    orderAPI.getSpeedTest(json.draftId, downloadUrl, bandwidth, json.orderType);
+                }); 
+                //增加需要的详情字段
+                json.firstSendTime = data.orderSummary.firstSendTime;
+            });
+
+            //操作按钮点击后显示对应的填写表单确认等
+            var operationName = json.operationName;
+            $('.schedul_btn').bind('click', function () {
+                if (json.appointMent=="预约中") {
+					myUtils.propMessage("定单预约中，不能进行此操作", true);
+					return false;
+				}               
+                var operation = operationName[$(this).attr('index')];//取得操作name
+                var operationValue = json.operation[$(this).attr('index')];//取得操作value
+                if (json.isNetOrderFttr=="1" && operation == "改派") {
+                    myUtils.propMessage("此组网单，不能进行改派操作", true);
+                    return false;
+                }
+                //装机单退单审核角色优化
+                if (json.orderType=="1" && json.orderState=="待退单" && json.isRegressAudit=="0" && operationValue == "退单" ) {
+                    myUtils.propMessage("无权限操作退单", true);
+                    return false;
+                }        
+                if(json.orderType=="1" && json.serviceType.includes('新开宽带') && operationValue == "退单"){
+                    orderAPI.getOnlineLastTime(json, function(){
+                        op.getOperationHtml(operation, json);
+                        $('.schedul').show();
+                    }, function(){
+                        $('.schedul').hide();
+                    });
+                }else{
+                    //调用orderoperation_op的getOperationHtml方法来获取弹出显示的内容
+                    op.getOperationHtml(operation, json);
+                    $('.schedul').show();
+                }
+            });
+            //获取光功率
+            $('#schedul').on('click', '#get_rxpower_btn', function () {
+                orderAPI.getOnuPower(json.draftId, json.orderType);
+            });
+        
+            //质检
+            $('#orderMessage').on('click', '#orderCheck', function () {
+                var index = -1;
+                Util.hdb.registerHelper('indexPlush', function (plush) {
+                    if(plush == '+'){
+                        index++;
+                        return;
+                    }
+                    //this.type 是返回的数据
+                    return new Util.hdb.SafeString(index)
+                });
+                dialogAdd = new Dialog({
+                    id: 'comfirm1',
+                    mode: 'normal', //对话框模式，默认normal标准|tips浮动层|confirm确认对话框
+                    // delayRmove:3, //延迟删除秒数设定 默认3秒
+
+                    title: '工单质检', //对话框标题
+                    content: '<div id="orderCheckDialog">加载中...</div>', //对话框内容，可以是字符串、html片段、或dom对象,默认为loading状态（点组成的圈）
+
+                    ok: function () {
+                        // var data = $("#teamInfoList").serialize();
+                        var data = $('#orderCheckDialog form').serialize();
+                        data += '&draftId=' + json.draftId + '&checkResult=' + false;
+                        orderAPI.orderCheckSubmit(data)
+                    }, //确定按钮的回调函数 
+                    okValue: '质检不通过', //确定按钮的文本
+                    cancelDisplay: false, //是否显示取消按钮 默认true显示|false不显示
+                    width: 600, //对话框宽度
+                    height: 400, //对话框高度
+                    skin: 'dialogSkin', //设置对话框额外的className参数
+                    fixed: true, //是否开启固定定位 默认false不开启|true开启
+                    quickClose: true, //点击空白处快速关闭 默认false不关闭|true关闭
+                    // statusbar:'<label><input type="checkbox">不再提醒</label>',
+                    button: [
+                        {
+                            value: '质检通过',  //自定义按钮文本
+                            callback: function () { //自定义按钮回调函数
+                                var data = $('#orderCheckDialog form').serialize();
+                                data += '&draftId=' + json.draftId + '&checkResult=' + true;
+                                orderAPI.orderCheckSubmit(data)
+                                // return false; //阻止对话框关闭
+                            },
+                            autofocus: true //是否自动获取焦点
+                        }
+                    ]
+
+                    // modal:false   //是否开启模态框状态  默认false不开启|true开启,confirm默认状态为true
+                });
+                orderAPI.getOrderCheck(json.draftId, { el: $('#orderCheckDialog'), tpl: orderCheckTpl });
+            });
+
+            //耗材的展开和收缩
+            $("#orderMessage").on('click', '.item .header a', function () {
+                var $this = $(this);
+                var clsName = $this.attr("class");
+                if ("down" == clsName) {
+                    $this.attr("class", "up");
+                    $this.attr("title", "展开");
+                    $this.parent().siblings(".content").hide();
+                }
+                if ("up" == clsName) {
+                    $this.attr("class", "down");
+                    $this.attr("title", "收缩");
+                    $this.parent().siblings(".content").show();
+                }
+            });
+            /**
+             * 附件图片，增加放大缩小效果
+             */
+            $("#orderMessage").on('click', '.attachContainer img', function() {
+				var $this = $(this);
+				var zoom = $this.attr("zoom");
+                var className = $this.attr("class");
+                if("isFreeClinic"==className){
+                    if(zoom && zoom == 'min') {
+                        $this.css('width', '120px');
+                        $this.css('height', 'auto');
+                        $this.parent().css('width', '120px');
+                        $this.parent().css('height', '120px');
+                        $this.attr("zoom", "max");
+                    } else {
+                        $this.css('width', '480px');
+                        $this.css('height', 'auto');
+                        $this.parent().css('width', '480px');
+                        $this.parent().css('height', 'auto');
+                        $this.attr("zoom", "min");
+                    }
+                }else{
+                    if(zoom && zoom == 'min') {
+                        $this.css('width', '120px');
+                        $this.css('height', '120px');
+                        $this.attr("zoom", "max");
+                    } else {
+                        $this.css('width', '80%');
+                        $this.css('height', '80%');
+                        $this.attr("zoom", "min");
+                    }
+                }		
+			});
+        }
+        function hideGroupList() {
+            $(".sel_groups").hide();
+        };
+    });
